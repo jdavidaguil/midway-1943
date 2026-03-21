@@ -33,7 +33,7 @@
   </style>
 </head>
 <body>
-<canvas id="gameCanvas" width="320" height="480"></canvas>
+<canvas id="gameCanvas" width="480" height="720"></canvas>
 <div id="ui">ARROWS/WASD=MOVE &nbsp; SPACE=PAUSE &nbsp; ENTER=START</div>
 
 <script>
@@ -42,41 +42,47 @@
 // ─────────────────────────────────────────────
 //  CONSTANTS
 // ─────────────────────────────────────────────
-const W = 320, H = 480;
-const SPRITE_W = 32, SPRITE_H = 32;
-const SHEET_COLS = 8;   // sprites per row (will be confirmed after load)
+const W = 480, H = 720;
 
-// Sprite-sheet row/col indices  (col, row) zero-based
-// Layout assumption for a classic 1943-style 256×256 or similar sheet:
-//   Row 0: player plane variants / explosions start
-//   Row 1: enemy small planes
-//   Row 2: enemy medium planes
-//   Row 3: enemy large planes / battleships
-//   Row 4: boats / misc enemies
-//   Row 5: bullets / projectiles
-//   Row 6: power-ups (P, POW, FUEL)
-//   Row 7: explosion frames
-//
-// These will be auto-detected; if sheet is empty/invalid, procedural sprites are used.
-
+// Sprite-sheet absolute pixel coordinates for resources/sprites.jpg (1376×752).
+// Each entry: { sx, sy, sw, sh, dw, dh [, flipY] [, rot] }
+//   sx/sy/sw/sh = source rect in sheet
+//   dw/dh       = draw size on screen (before any rotation)
+//   flipY       = flip vertically (enemy planes face UP in sheet → face DOWN in game)
+//   rot         = rotation in degrees (ships face RIGHT in sheet → rot:90 → face DOWN)
 const SPRITES = {
-  PLAYER:        { col: 0, row: 0 },
-  PLAYER_SHIELD: { col: 1, row: 0 },
-  EXP0:          { col: 0, row: 7 },
-  EXP1:          { col: 1, row: 7 },
-  EXP2:          { col: 2, row: 7 },
-  EXP3:          { col: 3, row: 7 },
-  EXP4:          { col: 4, row: 7 },
-  ENEMY_SMALL:   { col: 0, row: 1 },
-  ENEMY_MED:     { col: 0, row: 2 },
-  ENEMY_LARGE:   { col: 0, row: 3 },
-  ENEMY_SHIP:    { col: 0, row: 4 },
-  ENEMY_BOAT:    { col: 4, row: 4 },
-  BULLET_PLAYER: { col: 0, row: 5 },
-  BULLET_ENEMY:  { col: 2, row: 5 },
-  PU_P:          { col: 0, row: 6 },
-  PU_POW:        { col: 2, row: 6 },
-  PU_FUEL:       { col: 4, row: 6 },
+  // ── Player (faces UP = correct) ─────────────────────────────────
+  PLAYER:          { sx: 292, sy:  51, sw:190, sh:168, dw:72, dh:63 },
+
+  // ── Enemy planes (faces UP in sheet → flipY to face DOWN) ───────
+  ENEMY_SMALL:     { sx: 774, sy:  74, sw:115, sh:122, dw:48, dh:51, flipY:true },
+  ENEMY_MED:       { sx:  28, sy:  51, sw:202, sh:168, dw:66, dh:56, flipY:true },
+  ENEMY_LARGE:     { sx: 527, sy:  46, sw:202, sh:179, dw:78, dh:69, flipY:true },
+  ENEMY_HEAVY:     { sx:1158, sy:  63, sw:173, sh:139, dw:78, dh:63, flipY:true },
+  ENEMY_TEAL:      { sx: 946, sy:  74, sw:139, sh:122, dw:57, dh:51, flipY:true },
+
+  // ── Ships (face RIGHT in sheet → rot:90 → face DOWN) ────────────
+  // dw=ship length, dh=ship width; after rot screen collision box = dh×dw
+  ENEMY_SHIP:      { sx:  46, sy: 262, sw:390, sh:107, dw:135, dh:33, rot:90 },
+  ENEMY_CRUISER:   { sx:  46, sy: 436, sw:413, sh: 81, dw:135, dh:27, rot:90 },
+  ENEMY_DARKSHIP:  { sx:  46, sy: 576, sw:453, sh:114, dw:144, dh:36, rot:90 },
+  ENEMY_BOAT:      { sx: 521, sy: 299, sw:167, sh: 63, dw: 66, dh:21, rot:90 },
+  ENEMY_SPEEDBOAT: { sx: 521, sy: 459, sw:179, sh: 58, dw: 66, dh:18, rot:90 },
+
+  // ── Explosions (4 frames, small → huge) ─────────────────────────
+  EXP0:            { sx: 854, sy: 344, sw: 29, sh: 36, dw: 33, dh: 42 },
+  EXP1:            { sx: 940, sy: 327, sw: 64, sh: 70, dw: 60, dh: 66 },
+  EXP2:            { sx:1060, sy: 320, sw: 88, sh: 83, dw: 84, dh: 78 },
+  EXP3:            { sx:1204, sy: 304, sw:115, sh:110, dw:108, dh:102 },
+
+  // ── Bullets ─────────────────────────────────────────────────────
+  BULLET_PLAYER:   { sx:1078, sy: 471, sw: 69, sh: 29, dw:21, dh:11, rot:-90 },
+  BULLET_ENEMY:    { sx: 940, sy: 482, sw: 18, sh: 18, dw:15, dh:15 },
+
+  // ── Power-ups ───────────────────────────────────────────────────
+  PU_P:            { sx: 888, sy: 597, sw:110, sh:109, dw:39, dh:39 },
+  PU_POW:          { sx:1043, sy: 597, sw:116, sh:109, dw:39, dh:39 },
+  PU_FUEL:         { sx:1204, sy: 597, sw:115, sh:109, dw:39, dh:39 },
 };
 
 // ─────────────────────────────────────────────
@@ -87,236 +93,28 @@ const ctx = canvas.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 
 // ─────────────────────────────────────────────
-//  PROCEDURAL SPRITE PAINTER
-//  Used when sprite sheet pixel data is absent.
+//  (Procedural sprite painter removed — using resources/sprites.jpg)
 // ─────────────────────────────────────────────
-function buildProceduralSheet() {
-  const cols = 8, rows = 8;
-  const sc = document.createElement('canvas');
-  sc.width  = cols * SPRITE_W;
-  sc.height = rows * SPRITE_H;
-  const sx = sc.getContext('2d');
-  sx.imageSmoothingEnabled = false;
-
-  function cell(col, row) {
-    return { x: col * SPRITE_W, y: row * SPRITE_H };
-  }
-
-  // Helper: draw pixel-art shape
-  function drawShape(col, row, drawFn) {
-    const {x, y} = cell(col, row);
-    sx.save();
-    sx.translate(x, y);
-    drawFn(sx);
-    sx.restore();
-  }
-
-  // ── Player plane (row 0, col 0) – blue/white
-  drawShape(0, 0, (g) => {
-    // Body
-    g.fillStyle = '#4af';
-    g.fillRect(13,  2, 6, 20);
-    // Wings
-    g.fillStyle = '#28d';
-    g.fillRect(4,  10, 24, 6);
-    // Nose
-    g.fillStyle = '#fff';
-    g.fillRect(14,  0, 4, 4);
-    // Cockpit
-    g.fillStyle = '#8ef';
-    g.fillRect(14, 6, 4, 6);
-    // Tail fins
-    g.fillStyle = '#28d';
-    g.fillRect(8,  18, 5, 4);
-    g.fillRect(19, 18, 5, 4);
-    // Engine glow
-    g.fillStyle = '#ff6';
-    g.fillRect(14, 22, 4, 6);
-  });
-
-  // ── Player shield variant (row 0, col 1) – same + orange outline
-  drawShape(1, 0, (g) => {
-    g.fillStyle = '#4af';
-    g.fillRect(13, 2, 6, 20);
-    g.fillStyle = '#28d';
-    g.fillRect(4, 10, 24, 6);
-    g.fillStyle = '#fff'; g.fillRect(14, 0, 4, 4);
-    g.fillStyle = '#8ef'; g.fillRect(14, 6, 4, 6);
-    g.fillStyle = '#28d'; g.fillRect(8, 18, 5, 4); g.fillRect(19, 18, 5, 4);
-    g.fillStyle = '#ff6'; g.fillRect(14, 22, 4, 6);
-    g.strokeStyle = '#f80'; g.lineWidth = 2;
-    g.strokeRect(1, 1, 30, 30);
-  });
-
-  // ── Enemy small plane (row 1, col 0) – green
-  drawShape(0, 1, (g) => {
-    g.fillStyle = '#4c4';
-    g.fillRect(13, 6, 6, 18);
-    g.fillStyle = '#282';
-    g.fillRect(6, 14, 20, 5);
-    g.fillStyle = '#8f8';
-    g.fillRect(14, 8, 4, 6);
-    g.fillStyle = '#6f6';
-    g.fillRect(9, 22, 4, 4); g.fillRect(19, 22, 4, 4);
-    g.fillStyle = '#600';
-    g.fillRect(14, 4, 4, 4);
-  });
-
-  // ── Enemy medium plane (row 2, col 0) – dark green
-  drawShape(0, 2, (g) => {
-    g.fillStyle = '#393';
-    g.fillRect(12, 4, 8, 24);
-    g.fillStyle = '#1a1';
-    g.fillRect(4, 12, 24, 7);
-    g.fillStyle = '#6f6';
-    g.fillRect(13, 6, 6, 7);
-    g.fillStyle = '#393'; g.fillRect(7, 22, 6, 5); g.fillRect(19, 22, 6, 5);
-    g.fillStyle = '#a22'; g.fillRect(13, 2, 6, 4);
-  });
-
-  // ── Enemy large plane (row 3, col 0) – grey-green bomber
-  drawShape(0, 3, (g) => {
-    g.fillStyle = '#556644';
-    g.fillRect(10, 2, 12, 28);
-    g.fillStyle = '#445533';
-    g.fillRect(2, 10, 28, 10);
-    g.fillStyle = '#778866';
-    g.fillRect(12, 4, 8, 8);
-    g.fillRect(3, 11, 6, 7); g.fillRect(23, 11, 6, 7);
-    g.fillStyle = '#a33'; g.fillRect(12, 0, 8, 4);
-    g.fillStyle = '#ff8'; g.fillRect(13, 26, 6, 4);
-  });
-
-  // ── Battleship (row 4, col 0) – grey, 48px tall using 32px cell approximation
-  drawShape(0, 4, (g) => {
-    // Use the 32×32 cell, draw a compact ship
-    g.fillStyle = '#667';
-    g.fillRect(6, 1, 20, 30);
-    g.fillStyle = '#889';
-    g.fillRect(8, 3, 16, 4);   // deck
-    g.fillRect(10, 7, 12, 4);  // superstructure
-    g.fillRect(12, 11, 8, 6);  // tower
-    g.fillStyle = '#aab';
-    g.fillRect(13, 8, 6, 4);
-    // Gun barrels
-    g.fillStyle = '#334';
-    g.fillRect(11, 5, 3, 3); g.fillRect(18, 5, 3, 3);
-    g.fillRect(8, 14, 3, 2); g.fillRect(21, 14, 3, 2);
-    // Wake
-    g.fillStyle = '#adf';
-    g.fillRect(4, 26, 4, 4); g.fillRect(24, 26, 4, 4);
-  });
-
-  // ── Boat (row 4, col 4) – small brown boat
-  drawShape(4, 4, (g) => {
-    g.fillStyle = '#964';
-    g.fillRect(8, 12, 16, 10);
-    g.fillStyle = '#b86';
-    g.fillRect(10, 9, 12, 5);
-    g.fillStyle = '#753';
-    g.fillRect(14, 6, 4, 4);
-    g.fillStyle = '#adf';
-    g.fillRect(4, 20, 6, 3); g.fillRect(22, 20, 6, 3);
-  });
-
-  // ── Player bullet (row 5, col 0) – bright yellow vertical
-  drawShape(0, 5, (g) => {
-    g.fillStyle = '#ff0';
-    g.fillRect(14, 2, 4, 14);
-    g.fillStyle = '#fff';
-    g.fillRect(15, 2, 2, 4);
-  });
-
-  // ── Enemy bullet (row 5, col 2) – red
-  drawShape(2, 5, (g) => {
-    g.fillStyle = '#f44';
-    g.fillRect(14, 6, 4, 16);
-    g.fillStyle = '#f88';
-    g.fillRect(15, 8, 2, 4);
-  });
-
-  // ── Power-up P (row 6, col 0) – cyan
-  drawShape(0, 6, (g) => {
-    g.fillStyle = '#0cc';
-    g.fillRect(4, 4, 24, 24);
-    g.fillStyle = '#000';
-    g.font = 'bold 18px monospace';
-    g.fillText('P', 10, 23);
-  });
-
-  // ── Power-up POW (row 6, col 2) – orange
-  drawShape(2, 6, (g) => {
-    g.fillStyle = '#f80';
-    g.fillRect(4, 4, 24, 24);
-    g.fillStyle = '#000';
-    g.font = 'bold 9px monospace';
-    g.fillText('POW', 5, 19);
-  });
-
-  // ── Power-up FUEL (row 6, col 4) – green
-  drawShape(4, 6, (g) => {
-    g.fillStyle = '#0a0';
-    g.fillRect(4, 4, 24, 24);
-    g.fillStyle = '#fff';
-    g.font = 'bold 8px monospace';
-    g.fillText('FUEL', 4, 19);
-  });
-
-  // ── Explosion frames (row 7, cols 0-4)
-  const expColors = [
-    ['#ff0','#f80'],
-    ['#f80','#f40'],
-    ['#f40','#f00'],
-    ['#f00','#800'],
-    ['#800','#400'],
-  ];
-  for (let i = 0; i < 5; i++) {
-    drawShape(i, 7, (g) => {
-      const [c1, c2] = expColors[i];
-      const r = 4 + i * 2;
-      const cx_ = 16, cy_ = 16;
-      // Outer bloom
-      g.fillStyle = c2;
-      g.beginPath();
-      g.arc(cx_, cy_, r + 4, 0, Math.PI * 2);
-      g.fill();
-      // Inner fire
-      g.fillStyle = c1;
-      g.beginPath();
-      g.arc(cx_, cy_, r, 0, Math.PI * 2);
-      g.fill();
-      // Sparks
-      g.fillStyle = '#fff';
-      const sparks = [[cx_-r-2, cy_],[cx_+r+2, cy_],[cx_, cy_-r-2],[cx_, cy_+r+2]];
-      for (const [sx_, sy_] of sparks) {
-        g.fillRect(sx_-1, sy_-1, 3, 3);
-      }
-    });
-  }
-
-  return sc;
+function buildProceduralSheet() { // stub — unused
+  return null;
 }
 
 // ─────────────────────────────────────────────
 //  SPRITE UTILITIES
 // ─────────────────────────────────────────────
 let sheet = null;
-let sheetCols = SHEET_COLS;
-let sheetRows = 8;
 
-function getSprite(key) {
-  const def = SPRITES[key];
-  if (!def) return null;
-  return { sx: def.col * SPRITE_W, sy: def.row * SPRITE_H, sw: SPRITE_W, sh: SPRITE_H };
-}
-
-function drawSprite(key, dx, dy, flipX = false, scaleX = 1, scaleY = 1) {
-  const sp = getSprite(key);
+// Draw a sprite centered at (cx, cy).
+// hudScale < 1 shrinks the sprite (used for HUD life icons).
+function drawSprite(key, cx, cy, hudScale = 1) {
+  const sp = SPRITES[key];
   if (!sp || !sheet) return;
   ctx.save();
-  ctx.translate(dx + (flipX ? SPRITE_W * scaleX : 0), dy);
-  if (flipX) ctx.scale(-1, 1);
-  ctx.drawImage(sheet, sp.sx, sp.sy, sp.sw, sp.sh, 0, 0, SPRITE_W * scaleX, SPRITE_H * scaleY);
+  ctx.translate(Math.round(cx), Math.round(cy));
+  if (sp.rot) ctx.rotate(sp.rot * Math.PI / 180);
+  if (sp.flipY) ctx.scale(1, -1);
+  const dw = sp.dw * hudScale, dh = sp.dh * hudScale;
+  ctx.drawImage(sheet, sp.sx, sp.sy, sp.sw, sp.sh, -dw / 2, -dh / 2, dw, dh);
   ctx.restore();
 }
 
@@ -485,15 +283,13 @@ function updateExplosions(dt) {
     if (e.timer >= e.frameDur) {
       e.frame++;
       e.timer = 0;
-      if (e.frame >= 5) explosions.splice(i, 1);
+      if (e.frame >= 4) explosions.splice(i, 1);
     }
   }
 }
 function drawExplosions() {
   for (const e of explosions) {
-    const key = `EXP${e.frame}`;
-    const sc = e.size * SPRITE_W;
-    drawSprite(key, e.x - sc/2, e.y - sc/2, false, e.size, e.size);
+    drawSprite(`EXP${Math.min(e.frame, 3)}`, e.x, e.y);
   }
 }
 
@@ -517,9 +313,9 @@ function updateBullets(dt) {
 function drawBullets() {
   for (const b of bullets) {
     if (b.owner === 'player') {
-      drawSprite('BULLET_PLAYER', b.x - 2, b.y - 5);
+      drawSprite('BULLET_PLAYER', b.x, b.y);
     } else {
-      drawSprite('BULLET_ENEMY', b.x - 2, b.y - 5);
+      drawSprite('BULLET_ENEMY', b.x, b.y);
     }
   }
 }
@@ -531,7 +327,7 @@ const powerups = [];
 const PU_TYPES = ['P', 'POW', 'FUEL'];
 function spawnPowerup(x, y) {
   const type = PU_TYPES[Math.floor(Math.random() * PU_TYPES.length)];
-  powerups.push({ x, y, type, vy: 40, w: SPRITE_W, h: SPRITE_H, active: true });
+  powerups.push({ x, y, type, vy: 40, w: 26, h: 26, active: true });
 }
 function updatePowerups(dt) {
   for (let i = powerups.length - 1; i >= 0; i--) {
@@ -543,7 +339,7 @@ function updatePowerups(dt) {
 function drawPowerups() {
   for (const p of powerups) {
     const key = { P: 'PU_P', POW: 'PU_POW', FUEL: 'PU_FUEL' }[p.type];
-    drawSprite(key, p.x - 16, p.y - 16);
+    drawSprite(key, p.x, p.y);
   }
 }
 
@@ -552,37 +348,18 @@ function drawPowerups() {
 // ─────────────────────────────────────────────
 const enemies = [];
 
+// Ships: collision box swaps dw/dh after rot:90 (screen w=dh, h=dw).
 const ENEMY_DEFS = {
-  small: {
-    key: 'ENEMY_SMALL', w: 28, h: 28,
-    hp: 1, speed: 90, score: 100,
-    shootRate: 0, bulletSpeed: 160,
-    size: 1,
-  },
-  medium: {
-    key: 'ENEMY_MED', w: 30, h: 30,
-    hp: 3, speed: 60, score: 250,
-    shootRate: 1.4, bulletSpeed: 140,
-    size: 1,
-  },
-  large: {
-    key: 'ENEMY_LARGE', w: 32, h: 32,
-    hp: 8, speed: 40, score: 500,
-    shootRate: 0.8, bulletSpeed: 120,
-    size: 1,
-  },
-  ship: {
-    key: 'ENEMY_SHIP', w: 48, h: 48,
-    hp: 20, speed: 20, score: 1000,
-    shootRate: 0.5, bulletSpeed: 100,
-    size: 1.5,
-  },
-  boat: {
-    key: 'ENEMY_BOAT', w: 28, h: 28,
-    hp: 2, speed: 75, score: 150,
-    shootRate: 0.6, bulletSpeed: 130,
-    size: 1,
-  },
+  small:     { key:'ENEMY_SMALL',     w:48, h:51,  hp:1,  speed:90,  score:100,  shootRate:0,   bulletSpeed:160 },
+  medium:    { key:'ENEMY_MED',       w:66, h:56,  hp:3,  speed:60,  score:250,  shootRate:1.4, bulletSpeed:140 },
+  large:     { key:'ENEMY_LARGE',     w:78, h:69,  hp:8,  speed:40,  score:500,  shootRate:0.8, bulletSpeed:120 },
+  heavy:     { key:'ENEMY_HEAVY',     w:78, h:63,  hp:12, speed:35,  score:700,  shootRate:0.7, bulletSpeed:110 },
+  teal:      { key:'ENEMY_TEAL',      w:57, h:51,  hp:2,  speed:75,  score:180,  shootRate:1.0, bulletSpeed:145 },
+  ship:      { key:'ENEMY_SHIP',      w:33, h:135, hp:20, speed:20,  score:1000, shootRate:0.5, bulletSpeed:100 },
+  cruiser:   { key:'ENEMY_CRUISER',   w:27, h:135, hp:15, speed:25,  score:800,  shootRate:0.6, bulletSpeed:110 },
+  darkship:  { key:'ENEMY_DARKSHIP',  w:36, h:144, hp:30, speed:15,  score:1500, shootRate:0.4, bulletSpeed:90  },
+  boat:      { key:'ENEMY_BOAT',      w:21, h:66,  hp:2,  speed:75,  score:150,  shootRate:0.6, bulletSpeed:130 },
+  speedboat: { key:'ENEMY_SPEEDBOAT', w:18, h:66,  hp:1,  speed:100, score:120,  shootRate:0.4, bulletSpeed:150 },
 };
 
 function spawnEnemy(type, x, y, wave) {
@@ -598,10 +375,9 @@ function spawnEnemy(type, x, y, wave) {
     hp: scaledHp, maxHp: scaledHp,
     score: def.score,
     shootRate: def.shootRate,
-    shootTimer: Math.random() * def.shootRate,
+    shootTimer: Math.random() * (def.shootRate || 1),
     bulletSpeed: def.bulletSpeed,
     active: true,
-    size: def.size,
     flashTimer: 0,
     wave,
   });
@@ -614,9 +390,13 @@ function updateEnemies(dt, player) {
     e.y += e.vy * dt;
     e.flashTimer -= dt;
 
-    // Bounce horizontally for planes
-    if (e.type !== 'ship' && e.type !== 'boat') {
-      if (e.x < 10 || e.x > W - 10) e.vx *= -1;
+    // Planes bounce horizontally; ships/boats move straight down
+    const isShip = e.type === 'ship' || e.type === 'cruiser' || e.type === 'darkship' ||
+                   e.type === 'boat' || e.type === 'speedboat';
+    if (isShip) {
+      e.vx = 0;
+    } else if (e.x < 10 || e.x > W - 10) {
+      e.vx *= -1;
     }
 
     // Shooting
@@ -646,15 +426,14 @@ function drawEnemies() {
     if (e.flashTimer > 0) {
       ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(e.flashTimer * 40));
     }
-    const sc = e.size;
-    drawSprite(e.key, e.x - (SPRITE_W * sc)/2, e.y - (SPRITE_H * sc)/2, false, sc, sc);
+    drawSprite(e.key, e.x, e.y);
     ctx.globalAlpha = 1;
 
     // Health bar for tougher enemies
     if (e.maxHp > 2) {
-      const bw = SPRITE_W * sc;
-      const bx = e.x - bw/2;
-      const by = e.y - SPRITE_H * sc / 2 - 6;
+      const bw = e.w;
+      const bx = e.x - bw / 2;
+      const by = e.y - e.h / 2 - 6;
       ctx.fillStyle = '#400';
       ctx.fillRect(bx, by, bw, 3);
       ctx.fillStyle = '#0f0';
@@ -668,7 +447,7 @@ function drawEnemies() {
 // ─────────────────────────────────────────────
 const player = {
   x: W / 2, y: H - 80,
-  w: 28, h: 28,
+  w: 42, h: 42,
   speed: 160,
   active: true,
   hp: 3, maxHp: 3,
@@ -761,7 +540,7 @@ function playerBomb() {
   sfxBomb();
   for (const e of enemies) {
     player.score += e.score;
-    spawnExplosion(e.x, e.y, e.size || 1);
+    spawnExplosion(e.x, e.y, 1);
     e.active = false;
   }
   enemies.length = 0;
@@ -775,8 +554,14 @@ function playerBomb() {
 function drawPlayer() {
   if (!player.active) return;
   if (player.invincible > 0 && Math.floor(player.invincible * 10) % 2 === 0) return;
-  const key = player.invincible > 1.5 ? 'PLAYER_SHIELD' : 'PLAYER';
-  drawSprite(key, player.x - 16, player.y - 16);
+  drawSprite('PLAYER', player.x, player.y);
+  if (player.invincible > 1.5) {
+    ctx.strokeStyle = 'rgba(255,140,0,0.85)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 28, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -812,7 +597,7 @@ function checkCollisions() {
         sfxHit();
         if (e.hp <= 0) {
           player.score += e.score;
-          spawnExplosion(e.x, e.y, e.size || 1);
+          spawnExplosion(e.x, e.y, 1);
           if (Math.random() < 0.12) spawnPowerup(e.x, e.y);
           e.active = false;
           enemies.splice(ei, 1);
@@ -917,19 +702,21 @@ function spawnEnemy_(wave) {
   if (wave <= 1) {
     type = r < 0.7 ? 'small' : 'boat';
   } else if (wave <= 3) {
-    type = r < 0.4 ? 'small' : r < 0.75 ? 'medium' : r < 0.9 ? 'boat' : 'large';
+    type = r < 0.35 ? 'small' : r < 0.65 ? 'medium' : r < 0.8 ? 'teal' : r < 0.92 ? 'boat' : 'large';
   } else if (wave <= 5) {
-    type = r < 0.25 ? 'small' : r < 0.55 ? 'medium' : r < 0.75 ? 'large' : r < 0.92 ? 'boat' : 'ship';
+    type = r < 0.2 ? 'small' : r < 0.45 ? 'medium' : r < 0.6 ? 'large' : r < 0.7 ? 'teal' : r < 0.8 ? 'heavy' : r < 0.9 ? 'boat' : 'ship';
+  } else if (wave <= 8) {
+    type = r < 0.15 ? 'small' : r < 0.35 ? 'medium' : r < 0.5 ? 'large' : r < 0.65 ? 'heavy' : r < 0.75 ? 'boat' : r < 0.87 ? 'ship' : 'cruiser';
   } else {
-    type = r < 0.15 ? 'small' : r < 0.4 ? 'medium' : r < 0.6 ? 'large' : r < 0.78 ? 'boat' : 'ship';
+    type = r < 0.1 ? 'small' : r < 0.3 ? 'medium' : r < 0.45 ? 'large' : r < 0.6 ? 'heavy' : r < 0.7 ? 'speedboat' : r < 0.8 ? 'ship' : r < 0.9 ? 'cruiser' : 'darkship';
   }
 
-  // Formation spawning every few waves
-  if (wave > 2 && Math.random() < 0.25) {
+  // Formation spawning for planes only
+  const isShip = ['ship','cruiser','darkship','boat','speedboat'].includes(type);
+  if (wave > 2 && !isShip && Math.random() < 0.25) {
     const count = 3 + Math.floor(Math.random() * 3);
-    const ft = type === 'ship' ? 'small' : type;
     for (let i = 0; i < count; i++) {
-      spawnEnemy(ft, 20 + (i + 1) * (W / (count + 1)), y - i * 20, wave);
+      spawnEnemy(type, 20 + (i + 1) * (W / (count + 1)), y - i * 20, wave);
     }
   } else {
     spawnEnemy(type, x, y, wave);
@@ -953,7 +740,7 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.fillText('LIVES:', 4, 26);
   for (let i = 0; i < player.lives; i++) {
-    drawSprite('PLAYER', 40 + i * 18, 16, false, 0.5, 0.5);
+    drawSprite('PLAYER', 46 + i * 22, 22, 0.4);
   }
 
   // Fuel bar
@@ -1190,27 +977,19 @@ function gameLoop(timestamp) {
 function initGame() {
   const img = new Image();
   img.onload = () => {
-    // Validate: must have actual pixel data (width > 0)
-    if (img.naturalWidth >= SPRITE_W && img.naturalHeight >= SPRITE_H) {
-      sheet = document.createElement('canvas');
-      sheet.width  = img.naturalWidth;
-      sheet.height = img.naturalHeight;
-      const sc = sheet.getContext('2d');
-      sc.imageSmoothingEnabled = false;
-      sc.drawImage(img, 0, 0);
-      console.log(`Sprite sheet loaded: ${img.naturalWidth}×${img.naturalHeight}`);
-    } else {
-      console.warn('Sprite sheet invalid or empty — using procedural sprites.');
-      sheet = buildProceduralSheet();
-    }
+    sheet = document.createElement('canvas');
+    sheet.width  = img.naturalWidth;
+    sheet.height = img.naturalHeight;
+    const sc = sheet.getContext('2d');
+    sc.imageSmoothingEnabled = false;
+    sc.drawImage(img, 0, 0);
+    console.log(`Sprite sheet loaded: ${img.naturalWidth}×${img.naturalHeight}`);
     requestAnimationFrame(gameLoop);
   };
   img.onerror = () => {
-    console.warn('Sprite sheet not found — using procedural sprites.');
-    sheet = buildProceduralSheet();
-    requestAnimationFrame(gameLoop);
+    console.error('ERROR: resources/sprites.jpg not found. Cannot start game.');
   };
-  img.src = 'resources/sprites.jpg';
+  img.src = 'resources/sprites.png';
 }
 
 initGame();
